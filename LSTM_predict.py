@@ -3,9 +3,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
+
+
 
 # 1. Đọc file CSV và chọn cột
 file_path = r'D:\Data_Paper_5G\DATA\TTML.csv'
@@ -90,10 +93,9 @@ plt.show()
 
 # 4. Mô hình LSTM để dự đoán KPI (ví dụ: USER_DL_THP_NR)
 # Chuẩn bị data: Group by TTML, chọn target = 'USER_DL_THP_NR'
-target = 'USER_DL_THP_NR'  # Thay bằng KPI bạn muốn dự đoán
-sequence_length = 10  # Độ dài sequence (window size)
-n_steps = 5  # Dự đoán bao nhiêu bước tiếp theo
-
+target = 'USER_DL_THP_NR' # Thay bằng KPI bạn muốn dự đoán
+sequence_length = 10 # Độ dài sequence (window size)
+n_steps = 5 # Dự đoán bao nhiêu bước tiếp theo
 # Hàm tạo sequences cho LSTM
 def create_sequences(data, seq_length):
     xs, ys = [], []
@@ -103,53 +105,51 @@ def create_sequences(data, seq_length):
         xs.append(x)
         ys.append(y)
     return np.array(xs), np.array(ys)
-
 # Model LSTM đơn giản
 class LSTMModel(nn.Module):
     def __init__(self, input_size=1, hidden_size=50, num_layers=1):
         super(LSTMModel, self).__init__()
         self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True)
         self.fc = nn.Linear(hidden_size, 1)
-    
+   
     def forward(self, x):
         out, _ = self.lstm(x)
         out = self.fc(out[:, -1, :])
         return out
-
 # Dự đoán cho từng TTML
 for ttml in df['TTML'].unique():
     print(f"\nDự đoán cho {ttml}:")
-    
-    subset = df[df['TTML'] == ttml][[target]].values  # Chỉ lấy target column
-    
+   
+    subset = df[df['TTML'] == ttml][[target]].values # Chỉ lấy target column
+   
     if len(subset) < sequence_length + 1:
         print(f"Dữ liệu cho {ttml} quá ít ({len(subset)} dòng), bỏ qua LSTM.")
         continue
-    
+   
     # Scale data
     scaler = MinMaxScaler()
     subset_scaled = scaler.fit_transform(subset)
-    
+   
     # Tạo sequences
     X, y = create_sequences(subset_scaled, sequence_length)
-    X = X.reshape((X.shape[0], X.shape[1], 1))  # Reshape cho LSTM [samples, timesteps, features]
-    
+    X = X.reshape((X.shape[0], X.shape[1], 1)) # Reshape cho LSTM [samples, timesteps, features]
+   
     # Chia train/test (80/20)
     split = int(0.8 * len(X))
     X_train, X_test = X[:split], X[split:]
     y_train, y_test = y[:split], y[split:]
-    
+   
     # DataLoader
     train_data = TensorDataset(torch.from_numpy(X_train).float(), torch.from_numpy(y_train).float())
     train_loader = DataLoader(train_data, batch_size=32, shuffle=True)
-    
+   
     # Khởi tạo model
     model = LSTMModel()
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-    
+   
     # Train
-    epochs = 50  # Điều chỉnh nếu cần
+    epochs = 50 # Điều chỉnh nếu cần
     for epoch in range(epochs):
         model.train()
         for inputs, labels in train_loader:
@@ -160,17 +160,29 @@ for ttml in df['TTML'].unique():
             optimizer.step()
         if (epoch + 1) % 10 == 0:
             print(f'Epoch [{epoch+1}/{epochs}], Loss: {loss.item():.4f}')
-    
+   
     # Dự đoán trên test
     model.eval()
     with torch.no_grad():
         predicted = model(torch.from_numpy(X_test).float()).numpy()
     predicted = scaler.inverse_transform(predicted)
-    y_test = scaler.inverse_transform(y_test)
-    
+    y_test_original = scaler.inverse_transform(y_test)  # Đổi tên để rõ ràng
+   
+    # Tính metrics đánh giá
+    mse = mean_squared_error(y_test_original, predicted)
+    rmse = np.sqrt(mse)
+    mae = mean_absolute_error(y_test_original, predicted)
+    r2 = r2_score(y_test_original, predicted)
+   
+    print(f"Đánh giá trên test set cho {ttml}:")
+    print(f"MSE: {mse:.4f}")
+    print(f"RMSE: {rmse:.4f}")
+    print(f"MAE: {mae:.4f}")
+    print(f"R² Score: {r2:.4f}")
+   
     print(f"Dự đoán trên test set cho {ttml}:")
     print(predicted.flatten())
-    
+   
     # Dự đoán tương lai (n_steps bước)
     last_sequence = subset_scaled[-sequence_length:].reshape(1, sequence_length, 1)
     future_preds = []
@@ -179,11 +191,11 @@ for ttml in df['TTML'].unique():
             pred = model(torch.from_numpy(last_sequence).float()).numpy()
         future_preds.append(pred[0][0])
         last_sequence = np.append(last_sequence[:, 1:, :], pred.reshape(1, 1, 1), axis=1)
-    
+   
     future_preds = scaler.inverse_transform(np.array(future_preds).reshape(-1, 1))
     print(f"Dự đoán {n_steps} bước tiếp theo cho {ttml}:")
     print(future_preds.flatten())
-    
+   
     # Vẽ dự đoán
     plt.figure(figsize=(12, 6))
     plt.plot(subset, label='Thực tế')
